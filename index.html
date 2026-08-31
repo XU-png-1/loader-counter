@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>装载机往复自动计数器</title>
+<style>
+  :root{
+    --bg:#0f1419; --card:#1b232e; --card2:#222d3a; --line:#2c3a4a;
+    --txt:#e8eef5; --sub:#91a4b8; --accent:#2dd4bf; --accent2:#f59e0b;
+    --red:#ef4444; --green:#22c55e; --blue:#3b82f6;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    height:100%; overscroll-behavior:none;}
+  .wrap{max-width:520px; margin:0 auto; padding:14px 14px 30px; padding-top:max(14px,env(safe-area-inset-top));}
+  h1{font-size:19px; margin:6px 0 2px; font-weight:700; letter-spacing:.5px;}
+  .sub{color:var(--sub); font-size:12px; margin-bottom:12px;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; margin-bottom:12px;}
+  .count-box{text-align:center; padding:18px 10px; background:linear-gradient(160deg,#15303a,#1b232e);}
+  .count-label{color:var(--sub); font-size:13px; letter-spacing:1px;}
+  .count-num{font-size:76px; font-weight:800; line-height:1; margin:6px 0; color:var(--accent);
+    font-variant-numeric:tabular-nums; text-shadow:0 0 26px rgba(45,212,191,.35);}
+  .count-unit{color:var(--sub); font-size:13px;}
+  .stats{display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:14px;}
+  .stat{background:var(--card2); border-radius:12px; padding:10px 6px; text-align:center;}
+  .stat .v{font-size:20px; font-weight:700; font-variant-numeric:tabular-nums;}
+  .stat .k{font-size:11px; color:var(--sub); margin-top:3px;}
+  .speed-big{font-size:15px; font-weight:700; margin-top:12px; color:var(--accent2); font-variant-numeric:tabular-nums;}
+  .dir-pill{display:inline-block; padding:3px 12px; border-radius:999px; font-size:13px; font-weight:600;
+    background:#334155; color:#cbd5e1;}
+  .dir-fwd{background:rgba(34,197,94,.18); color:#4ade80;}
+  .dir-rev{background:rgba(239,68,68,.18); color:#f87171;}
+  .speed-wrap{height:12px; background:#0c1116; border-radius:8px; overflow:hidden; margin-top:14px; border:1px solid var(--line);}
+  .speed-bar{height:100%; width:0%; background:linear-gradient(90deg,#22c55c,#f59e0b,#ef4444); transition:width .3s ease;}
+  .btns{display:grid; grid-template-columns:1fr 1fr; gap:10px;}
+  .btn{border:none; border-radius:14px; padding:16px 10px; font-size:16px; font-weight:700; color:#fff;
+    background:var(--card2); border:1px solid var(--line); cursor:pointer; transition:transform .05s;}
+  .btn:active{transform:scale(.97);}
+  .btn.primary{background:var(--accent); color:#06231f; border:none;}
+  .btn.warn{background:var(--accent2); color:#3a2400; border:none;}
+  .btn.ghost{background:transparent;}
+  .btn.full{grid-column:1/-1;}
+  .row{display:flex; align-items:center; justify-content:space-between; padding:9px 2px; border-bottom:1px solid var(--line);}
+  .row:last-child{border-bottom:none;}
+  .row label{font-size:14px;}
+  .row .val{color:var(--accent); font-size:13px; font-variant-numeric:tabular-nums;}
+  input[type=range]{width:55%; accent-color:var(--accent);}
+  .toggle{width:46px; height:26px; border-radius:999px; background:#3a4756; position:relative; cursor:pointer; transition:background .2s;}
+  .toggle.on{background:var(--accent);}
+  .toggle::after{content:""; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; transition:left .2s;}
+  .toggle.on::after{left:23px;}
+  details summary{cursor:pointer; font-weight:600; font-size:15px; list-style:none; padding:2px 0;}
+  details summary::-webkit-details-marker{display:none;}
+  details summary::before{content:"▸ "; color:var(--sub);}
+  details[open] summary::before{content:"▾ ";}
+  .log{max-height:160px; overflow:auto; margin-top:8px; font-size:13px; color:var(--sub);}
+  .log div{display:flex; justify-content:space-between; padding:4px 2px; border-bottom:1px dashed #243040;}
+  .log .t{color:#7c8da0;}
+  .hint{font-size:12px; color:var(--sub); line-height:1.6; margin-top:6px;}
+  .badge{font-size:11px; padding:2px 8px; border-radius:6px; background:#243040; color:var(--sub);}
+  .badge.ok{background:rgba(34,197,94,.18); color:#4ade80;}
+  .badge.warn{background:rgba(234,179,8,.18); color:#facc15;}
+  .badge.err{background:rgba(239,68,68,.18); color:#f87171;}
+  .sel{appearance:none;-webkit-appearance:none;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:8px;padding:6px 10px;font-size:14px;color:#1f2937;min-width:120px;cursor:pointer;}
+  .flash{animation:fl .4s;}
+  @keyframes fl{0%{transform:scale(1);}30%{transform:scale(1.12);}100%{transform:scale(1);}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>装载机往复自动计数器</h1>
+  <div class="sub">GPS 定位感知直线往复运动 · 按方向变化自动计数
+    <span id="sensorBadge" class="badge">GPS 未启动</span>
+    <span id="autoBadge" class="badge"></span>
+    <span id="wakeBadge" class="badge ok" style="display:none">屏幕常亮中</span>
+  </div>
+
+  <div class="card count-box">
+    <div class="count-label">循环 / 换向次数</div>
+    <div class="count-num" id="countNum">0</div>
+    <div class="count-unit" id="modeText">模式：每往返 +1</div>
+    <div class="stats">
+      <div class="stat"><div class="v"><span id="dirPill" class="dir-pill">静止</span></div><div class="k">运动状态</div></div>
+      <div class="stat"><div class="v" id="rateV">0.0</div><div class="k">次 / 分钟</div></div>
+      <div class="stat"><div class="v" id="timeV">00:00</div><div class="k">计时</div></div>
+    </div>
+    <div class="speed-big" id="speedTxt">实时车速：0.0 km/h</div>
+    <div class="speed-wrap"><div class="speed-bar" id="speedBar"></div></div>
+    <div class="hint" id="speedHint">车速来自 GPS 定位，直接显示真实速度（km/h），不积分不漂移。</div>
+  </div>
+
+  <div class="card">
+    <div class="btns">
+      <button class="btn primary" id="startBtn">开始</button>
+      <button class="btn warn" id="resetBtn">重置</button>
+      <button class="btn ghost" id="manualBtn">手动 +1</button>
+      <button class="btn ghost" id="simBtn">模拟测试</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>参数设置</summary>
+      <div class="row">
+        <label>GPS精度上限(米)</label>
+        <input type="range" id="maxAccuracy" min="5" max="100" step="1" value="40">
+        <span class="val" id="maxAccuracyV">40</span>
+      </div>
+      <div class="hint">定位精度差于此值的位置将被忽略。越小越严格，室内可适当调大。</div>
+      <div class="row">
+        <label>运动阈值(km/h)</label>
+        <input type="range" id="minMoving" min="0.5" max="5" step="0.1" value="2">
+        <span class="val" id="minMovingV">2</span>
+      </div>
+      <div class="hint">GPS 车速高于此值才判定为"运动中"，低于则视为静止。</div>
+      <div class="row">
+        <label>换向角度(°)</label>
+        <input type="range" id="reversalAngle" min="90" max="170" step="5" value="120">
+        <span class="val" id="reversalAngleV">120</span>
+      </div>
+      <div class="hint">运动方向偏转超过此角度判定为换向。换向后需连续确认方向持续才计数，可滤掉 GPS 噪声尖峰。</div>
+      <div class="row">
+        <label>最小间隔(秒)</label>
+        <input type="range" id="minGap" min="0.3" max="5" step="0.1" value="0.5">
+        <span class="val" id="minGapV">0.5</span>
+      </div>
+      <div class="hint">两次计数之间至少间隔，防止重复计数。</div>
+      <div class="row">
+        <label>最小冲程时长(秒)</label>
+        <input type="range" id="minStroke" min="0.3" max="3" step="0.1" value="1.5">
+        <span class="val" id="minStrokeV">1.5</span>
+      </div>
+      <div class="hint">一个有效冲程至少持续时长，过滤短时晃动。</div>
+      <div class="row">
+        <label>最小峰值速度(km/h)</label>
+        <input type="range" id="minPeak" min="1" max="10" step="0.5" value="3">
+        <span class="val" id="minPeakV">3</span>
+      </div>
+      <div class="hint">一个有效冲程的峰值速度下限(km/h)，滤掉小幅运动。</div>
+      <div class="row">
+        <label>速度平滑</label>
+        <input type="range" id="speedSmooth" min="0" max="0.8" step="0.05" value="0.4">
+        <span class="val" id="speedSmoothV">0.4</span>
+      </div>
+      <div class="hint">GPS 速度的指数平滑系数，越大越平滑抗噪。</div>
+      <div class="row">
+        <label>计数口径</label>
+        <div class="toggle on" id="modeToggle"></div>
+      </div>
+      <div class="hint">"每往返+1"：前进+后退完整一个来回记 1 次。"每换向+1"：每次方向改变记 1 次。</div>
+      <div class="row">
+        <label>振动反馈</label>
+        <div class="toggle on" id="vibToggle"></div>
+      </div>
+      <div class="row">
+        <label>声音反馈</label>
+        <div class="toggle" id="sndToggle"></div>
+      </div>
+      <div class="row">
+        <label>屏幕常亮（防熄屏）</label>
+        <div class="toggle on" id="wakeToggle"></div>
+      </div>
+      <div class="hint">统计期间保持屏幕常亮、GPS 不中断。手机系统限制：网页在熄屏后会被暂停无法计数，请开启此开关并把手机放驾驶室；若机型不支持常亮，建议把系统自动熄屏时间调到最长。</div>
+      <div class="row">
+        <label>结果 ÷2（显示减半）</label>
+        <div class="toggle on" id="div2Toggle"></div>
+      </div>
+      <div class="hint">开启后，计数与频率按 ÷2 口径显示（如按单程换算往返、或降噪后口径需整体减半）。关闭则显示原始计数。</div>
+      <div class="row">
+        <label>自动停止时间</label>
+        <select id="autoStop" class="sel">
+          <option value="0">不设置</option>
+          <option value="15">15 分钟</option>
+          <option value="30">30 分钟</option>
+          <option value="60">60 分钟</option>
+        </select>
+      </div>
+      <div class="hint">到点后自动停止计数（暂停 GPS）。选"不设置"则一直运行，直到手动停止。运行中修改即时生效。</div>
+    </details>
+  </div>
+
+  <div class="card">
+    <details>
+      <summary>计数记录</summary>
+      <div class="log" id="logBox"><div style="color:#5b6b7d">暂无记录</div></div>
+    </details>
+  </div>
+
+  <div class="hint">
+    使用说明：<br>
+    1. 手机放在驾驶室内（口袋/仪表台/支架均可），确保 GPS 能收到信号。<br>
+    2. 点"开始"，浏览器请求位置权限请允许。<br>
+    3. 装载机直线前进→后退，每到掉头点运动方向反转即自动 +1。<br>
+    4. 手机系统限制：熄屏后网页会被暂停、无法计数。请保持"屏幕常亮"开关开启（统计时屏幕不熄灭）；若机型不支持，把系统自动熄屏时间调到最长。<br>
+    5. 计数与设置自动保存，误关页面或锁屏后重新打开不会丢失。<br>
+    6. 室内或 GPS 信号差时无法工作，可用"手动+1"兜底。<br>
+    7. 若漏计/多计，调"换向角度 / 最小间隔 / 运动阈值"。换向需连续 2 个读数确认，天然抗 GPS 跳变。
+    8. 单程约 20m 工况已预置适配参数：最小间隔 0.5s、最小冲程 1.5s。若装载机更慢（怠速搬运），可再调小这两个值。
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+  // ---------- 配置 ----------
+  const cfg = {
+    maxAccuracy: 40,     // m, GPS 定位精度上限（口袋等弱信号场景放宽到 40）
+    minMoving: 2.0,      // km/h, 运动判定阈值
+    reversalAngle: 120,  // 度, 运动方向偏转超过此值判定为换向
+    minGap: 0.5,         // 秒, 两次计数最小间隔（单程约20m时换向频繁，放宽到0.5s避免漏计）
+    minStrokeDur: 1.5,   // 秒, 一个有效冲程至少持续时长（单程约20m、低速工况更宽容，仍远大于GPS噪声抖动）
+    minPeak: 3.0,        // km/h, 一个有效冲程的峰值速度下限（GPS 噪声常 <3 km/h）
+    speedSmooth: 0.4,    // 速度 EMA 平滑系数（0~0.8），越大越平滑
+    perRound: true,      // true=每往返+1, false=每换向+1
+    vibrate: true,
+    sound: false,
+    keepAwake: true,     // 统计期间保持屏幕常亮（Wake Lock，防熄屏暂停）
+    div2: true,          // 结果 ÷2：显示/导出计数减半（如按单程换算往返、或降噪后口径调整）
+    autoStop: 0,         // 分钟，0=不设置；到点自动停止计数
+  };
+
+  // ---------- 状态 ----------
+  const S = {
+    running:false,
+    sim:false,
+    watchId:null,
+    count:0,
+    counts:[],
+    startTime:0,
+    lastCountT:0,
+    speed:0,               // 平滑后速度 km/h
+    speedRaw:0,            // 原始速度 km/h
+    curDir:0,              // +1=前进, -1=后退, 0=未定
+    // 位置追踪
+    refLat:null,
+    refLon:null,
+    posHistory:[],         // [{x, y, t}] 局部坐标（米）
+    // 冲程追踪
+    strokeHeading:null,    // 当前冲程运动方向角（度，0-360，正北为 0）
+    strokeStart:0,         // 冲程开始时间戳(ms)
+    strokePeak:0,          // 冲程峰值速度(km/h)
+    reversalParity:0,      // 每往返+1 时的奇偶计数
+    pendingReversal:null,  // 待确认的换向（下一读数确认方向持续后再计数）
+    autoStopAt:0,        // 自动停止目标时间戳(ms)，0=无
+    autoStopped:false,   // 是否因到时自动停止
+  };
+
+  // ---------- DOM ----------
+  const $ = id=>document.getElementById(id);
+  const countNum=$('countNum'), rateV=$('rateV'), timeV=$('timeV'),
+        dirPill=$('dirPill'), speedBar=$('speedBar'), speedTxt=$('speedTxt'),
+        modeText=$('modeText'), logBox=$('logBox'), sensorBadge=$('sensorBadge'),
+        autoBadge=$('autoBadge');
+
+  // ---------- 声音/振动 ----------
+  let audioCtx=null;
+  function beep(){
+    if(!cfg.sound) return;
+    try{
+      audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)();
+      const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+      o.frequency.value=880; o.type='sine';
+      g.gain.setValueAtTime(0.001,audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.3,audioCtx.currentTime+0.01);
+      g.gain.exponentialRampToValueAtTime(0.001,audioCtx.currentTime+0.18);
+      o.connect(g); g.connect(audioCtx.destination);
+      o.start(); o.stop(audioCtx.currentTime+0.2);
+    }catch(e){}
+  }
+  function vibrate(){ if(cfg.vibrate && navigator.vibrate) navigator.vibrate(60); }
+
+  // ---------- 坐标转换 ----------
+  // 经纬度 → 局部米坐标（等距矩形投影，以第一个位置为原点）
+  function toLocal(lat, lon){
+    if(S.refLat===null){ S.refLat=lat; S.refLon=lon; }
+    return {
+      x: (lon - S.refLon) * 111320 * Math.cos(S.refLat * Math.PI / 180),
+      y: (lat - S.refLat) * 110540
+    };
+  }
+
+  // 运动方向角（度，0-360）：优先 GPS 航向 heading（多普勒测向，抗位置噪声），缺失时用位置窗口兜底
+  // 兜底角度必须与当前冲程方向一致（夹角<60°）才采用：防止停顿/静止帧的位置噪声角度污染冲程方向
+  // （污染会触发假换向、或让真换向落入灰色区超时被撤销）
+  function getMoveHeading(coords, poor){
+    if(coords.heading !== null && coords.heading !== undefined && coords.heading >= 0){
+      return coords.heading;
+    }
+    if(!poor && S.posHistory.length >= 2){
+      const w = Math.min(3, S.posHistory.length - 1);  // 兜底窗口 3 点（2s）
+      const old = S.posHistory[S.posHistory.length - 1 - w];
+      const cur = S.posHistory[S.posHistory.length - 1];
+      const dx = cur.x - old.x, dy = cur.y - old.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      if(dist > 3.0){
+        const ang = (Math.atan2(dy, dx) * 180 / Math.PI + 360) % 360;
+        if(S.strokeHeading === null || headingDelta(S.strokeHeading, ang) < 60) return ang;
+      }
+    }
+    return null;
+  }
+
+  // 两航向角的最小夹角（0-180 度，处理 0/360 环绕）
+  function headingDelta(a, b){
+    let d = Math.abs(a - b) % 360;
+    if(d > 180) d = 360 - d;
+    return d;
+  }
+
+  // ---------- 核心：GPS 位置处理 ----------
+  function onPosition(pos){
+    if(!S.running) return;
+    const { latitude, longitude, accuracy, speed } = pos.coords;
+    const t = pos.timestamp || Date.now();
+
+    // 精度容忍：口袋/弱信号场景下 GPS accuracy 常达 20~50m。
+    // 不再因精度差直接丢弃整条读数——OS 上报的多普勒 speed/heading 即便在中等精度下仍可靠；
+    // 仅当精度差时跳过“位置差分兜底”（位置噪声大，不可用），并停止更新位置历史。
+    const poor = accuracy && accuracy > cfg.maxAccuracy;
+    if(poor){
+      sensorBadge.textContent = 'GPS 弱信号(' + accuracy.toFixed(0) + 'm)';
+      sensorBadge.className = 'badge warn';
+    } else {
+      sensorBadge.textContent = 'GPS 运行中·' + (accuracy?accuracy.toFixed(0):'?') + 'm';
+      sensorBadge.className = 'badge ok';
+      // 转换为局部坐标（仅用精度好的点维护位置历史，供位置差分兜底）
+      const p = toLocal(latitude, longitude);
+      S.posHistory.push({ x:p.x, y:p.y, t:t });
+      if(S.posHistory.length > 10) S.posHistory.shift();
+    }
+
+    // 计算速度（km/h）：优先 GPS 上报的多普勒速度（准），缺失时用位置差分兜底
+    let spd = -1;
+    if(speed !== null && speed !== undefined && speed >= 0){
+      spd = speed * 3.6;
+    }
+    if(spd < 0 && !poor && S.posHistory.length >= 2){
+      // 兜底：位置差分（5 点窗口平滑噪声）
+      const w = Math.min(5, S.posHistory.length - 1);
+      const old = S.posHistory[S.posHistory.length - 1 - w];
+      const cur = S.posHistory[S.posHistory.length - 1];
+      const dx = cur.x - old.x, dy = cur.y - old.y;
+      const dist = Math.sqrt(dx*dx + dy*dy);
+      const dt = (cur.t - old.t) / 1000;
+      if(dt > 0) spd = (dist / dt) * 3.6;
+    }
+    if(spd < 0) spd = 0;
+
+    // 速度平滑
+    S.speedRaw = spd;
+    if(S.speed === 0 && spd > 0) S.speed = spd;
+    else S.speed = S.speed * (1 - cfg.speedSmooth) + spd * cfg.speedSmooth;
+
+    // 运动检测 + 方向判定（方向优先用 GPS 航向，缺失时位置窗口兜底）
+    // 原始速度极低的停顿帧不提供运动方向，跳过判定（防止污染冲程方向）
+    const hasHeading = pos.coords.heading !== null && pos.coords.heading !== undefined && pos.coords.heading >= 0;
+    // 有 OS 航向时即便无位置历史也可判定方向（弱信号场景位置历史可能为空）
+    if((S.speed > cfg.minMoving && spd > 0.3) && (hasHeading || S.posHistory.length >= 2)){
+      const mh = getMoveHeading(pos.coords, poor);   // 当前运动方向角（度）或 null
+      if(mh !== null){
+        if(S.strokeHeading === null){
+          // 首次确立运动方向（不计）
+          S.strokeHeading = mh;
+          S.strokeStart = t;
+          S.strokePeak = S.speed;
+          S.curDir = 1;
+          updateDir(1);
+        } else {
+          // ① 先处理"待确认换向"：三态判定（沿新方向→确认 / 回旧方向→回弹 / 超时→撤销）
+          if(S.pendingReversal){
+            const pr = S.pendingReversal;
+            const aNew = headingDelta(S.strokeHeading, mh);   // 与"新方向"夹角
+            const aOld = headingDelta(pr.oldStrokeHeading, mh); // 与"旧方向"夹角
+            if(aNew < 60){
+              // 持续沿新方向：确认换向（方向已反转），补记该次换向
+              if(pr.valid) registerCount(pr.reversalT, pr.dirDesc);
+              S.pendingReversal = null;
+            } else if(aOld < 60){
+              // 回弹：回到旧方向（噪声尖峰），取消并恢复原冲程
+              S.strokeHeading = pr.oldStrokeHeading;
+              S.strokeStart = pr.oldStrokeStart;
+              S.strokePeak = pr.oldStrokePeak;
+              S.curDir = pr.oldCurDir;
+              updateDir(S.curDir);
+              S.pendingReversal = null;
+            } else if(t - pr.reversalT > 3000){
+              // 3 秒未确认：按噪声处理，恢复原冲程
+              S.strokeHeading = pr.oldStrokeHeading;
+              S.strokeStart = pr.oldStrokeStart;
+              S.strokePeak = pr.oldStrokePeak;
+              S.curDir = pr.oldCurDir;
+              updateDir(S.curDir);
+              S.pendingReversal = null;
+            }
+            // 其余情况：方向仍不明，保持待确认，等下一读数
+          }
+
+          // ② 更新本冲程峰值速度
+          if(S.speed > S.strokePeak) S.strokePeak = S.speed;
+
+          // ③ 检测方向反转（有待确认项时不重复检测，避免覆盖）
+          if(!S.pendingReversal){
+            const angle = headingDelta(S.strokeHeading, mh);
+            if(angle > cfg.reversalAngle){
+              // 疑似换向：先挂起，等下一读数确认方向持续后再计数
+              const dur = (t - S.strokeStart) / 1000;
+              const gapOk = S.lastCountT === 0 || (t - S.lastCountT) / 1000 > cfg.minGap;
+              const valid = dur >= cfg.minStrokeDur && S.strokePeak >= cfg.minPeak && gapOk;
+              S.pendingReversal = {
+                valid: valid,
+                reversalT: t,
+                dirDesc: S.curDir > 0 ? '前进→后退' : '后退→前进',
+                oldStrokeHeading: S.strokeHeading,
+                oldStrokeStart: S.strokeStart,
+                oldStrokePeak: S.strokePeak,
+                oldCurDir: S.curDir,
+              };
+              // 立即开启反向冲程（计数待确认）
+              S.strokeHeading = mh;
+              S.strokeStart = t;
+              S.strokePeak = S.speed;
+              S.curDir = -S.curDir;
+              updateDir(S.curDir);
+            }
+          }
+        }
+      }
+    } else if(S.speed < cfg.minMoving * 0.5){
+      // 停止（保留冲程状态，等恢复运动后继续比较方向）
+      updateDir(0);
+    }
+
+    renderSpeed();
+  }
+
+  function updateDir(dir){
+    if(dir > 0){ dirPill.textContent='前进 ▲'; dirPill.className='dir-pill dir-fwd'; }
+    else if(dir < 0){ dirPill.textContent='后退 ▼'; dirPill.className='dir-pill dir-rev'; }
+    else { dirPill.textContent='静止'; dirPill.className='dir-pill'; }
+  }
+  // 计数按 div2 口径显示（整数直接显示，非整数保留 1 位小数）
+  function fmtCount(n){
+    const v = cfg.div2 ? n / 2 : n;
+    return Number.isInteger(v) ? String(v) : v.toFixed(1);
+  }
+
+  function registerCount(t, dirDesc){
+    if(cfg.perRound){
+      // 每往返+1：奇数次换向（F→B，完成前进冲程）才记
+      S.reversalParity ^= 1;
+      if(S.reversalParity === 0) return;
+      dirDesc = dirDesc + '（往返完成）';
+    }
+    S.count++;
+    S.lastCountT = t;
+    S.counts.unshift({t:new Date(), dir:dirDesc});
+    if(S.counts.length > 40) S.counts.pop();
+    vibrate(); beep();
+    countNum.textContent = fmtCount(S.count);
+    countNum.classList.remove('flash'); void countNum.offsetWidth; countNum.classList.add('flash');
+    renderRate(); renderLog();
+    saveState();
+  }
+
+  // ---------- 渲染 ----------
+  function renderSpeed(){
+    const mx = 20;  // km/h 满量程
+    const dispSpeed = S.speed > cfg.minMoving ? S.speed : 0;  // 低于运动阈值显示 0
+    const pct = Math.min(100, dispSpeed / mx * 100);
+    speedBar.style.width = pct + '%';
+    speedTxt.textContent = '实时车速：' + dispSpeed.toFixed(1) + ' km/h';
+  }
+  function renderRate(){
+    if(!S.startTime){ rateV.textContent='0.0'; return; }
+    const mins = (Date.now() - S.startTime) / 60000;
+    const base = cfg.div2 ? S.count / 2 : S.count;
+    rateV.textContent = mins > 0 ? (base / mins).toFixed(1) : '0.0';
+  }
+  function renderLog(){
+    if(!S.counts.length){ logBox.innerHTML='<div style="color:#5b6b7d">暂无记录</div>'; return; }
+    let h = '';
+    for(const c of S.counts){
+      const tm = c.t.toLocaleTimeString('zh-CN', {hour12:false});
+      h += '<div><span>' + tm + '</span><span>' + c.dir + '</span></div>';
+    }
+    logBox.innerHTML = h;
+  }
+  function tickTimer(){
+    if(!S.startTime){ timeV.textContent='00:00'; autoBadge.textContent=''; return; }
+    const s = Math.floor((Date.now() - S.startTime) / 1000);
+    const mm = String(Math.floor(s/60)).padStart(2,'0');
+    const ss = String(s%60).padStart(2,'0');
+    timeV.textContent = mm + ':' + ss;
+    renderRate();
+    // 自动停止倒计时
+    if(S.running && S.autoStopAt > 0){
+      const left = S.autoStopAt - Date.now();
+      if(left <= 0){ doAutoStop(); }
+      else { autoBadge.textContent = '剩余 ' + fmtMMSS(Math.ceil(left/1000)); autoBadge.className = 'badge warn'; }
+    } else if(S.autoStopAt > 0 && !S.running){
+      autoBadge.textContent = '';
+    }
+  }
+  setInterval(tickTimer, 500);
+
+  // ---------- 屏幕常亮（Wake Lock，防熄屏暂停统计） ----------
+  let wakeLock = null;
+  async function applyWakeLock(){
+    // 不需要常亮（开关关闭或未在统计）时释放
+    if(!cfg.keepAwake || !S.running){
+      if(wakeLock){ try{ await wakeLock.release(); }catch(e){} wakeLock = null; }
+      updateWakeBadge();
+      return;
+    }
+    if('wakeLock' in navigator && document.visibilityState === 'visible'){
+      try{
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; updateWakeBadge(); });
+      }catch(e){ /* 用户拒绝或系统不支持 */ }
+    }
+    updateWakeBadge();
+  }
+  function updateWakeBadge(){
+    const b = $('wakeBadge');
+    if(wakeLock){
+      b.style.display = '';
+      b.className = 'badge ok';
+      b.textContent = '屏幕常亮中';
+    } else if(cfg.keepAwake && S.running && !('wakeLock' in navigator)){
+      b.style.display = '';
+      b.className = 'badge err';
+      b.textContent = '不支持常亮·防熄屏';
+    } else {
+      b.style.display = 'none';
+    }
+  }
+  // 页面重新可见（曾熄屏/切后台）：清除陈旧位置与冲程状态，防止恢复后位置跳变误判换向
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'visible'){
+      if(S.running && !S.sim){
+        S.posHistory = [];
+        S.strokeHeading = null;
+        S.curDir = 0;
+        S.pendingReversal = null;
+        S.speed = 0; S.speedRaw = 0;
+        sensorBadge.textContent = 'GPS 恢复中...';
+        sensorBadge.className = 'badge';
+      }
+      applyWakeLock();
+    }
+  });
+
+  // ---------- 本地持久化（误关页面/锁屏不丢计数） ----------
+  const LS_KEY = 'loaderCounter_v2';
+  function saveState(){
+    try{
+      localStorage.setItem(LS_KEY, JSON.stringify({
+        cfg: cfg,
+        count: S.count,
+        counts: S.counts.map(c => ({t: c.t.getTime(), dir: c.dir})),
+        startTime: S.startTime,
+        autoStopAt: S.autoStopAt,
+      }));
+    }catch(e){}
+  }
+  function loadState(){
+    try{
+      const raw = localStorage.getItem(LS_KEY);
+      if(!raw) return;
+      const d = JSON.parse(raw);
+      if(d.cfg) Object.assign(cfg, d.cfg);
+      S.count = d.count || 0;
+      S.counts = (d.counts || []).map(c => ({t: new Date(c.t), dir: c.dir}));
+      S.startTime = d.startTime || 0;
+      S.autoStopAt = d.autoStopAt || 0;
+      if(S.autoStopAt > 0 && Date.now() >= S.autoStopAt) S.autoStopAt = 0; // 过期则不再自动停
+    }catch(e){}
+  }
+  // 按已保存的配置同步 UI 控件
+  function syncUI(){
+    const sliders = [
+      ['maxAccuracy','maxAccuracy'],['minMoving','minMoving'],['reversalAngle','reversalAngle'],
+      ['minGap','minGap'],['minStroke','minStrokeDur'],['minPeak','minPeak'],['speedSmooth','speedSmooth'],
+    ];
+    for(const [id,key] of sliders){
+      const el = $(id); el.value = cfg[key];
+      const v = $(id + 'V'); if(v) v.textContent = cfg[key];
+    }
+    $('modeToggle').classList.toggle('on', cfg.perRound);
+    $('vibToggle').classList.toggle('on', cfg.vibrate);
+    $('sndToggle').classList.toggle('on', cfg.sound);
+    $('wakeToggle').classList.toggle('on', cfg.keepAwake);
+    $('div2Toggle').classList.toggle('on', cfg.div2);
+    $('autoStop').value = String(cfg.autoStop);
+    modeText.textContent = cfg.perRound ? '模式：每往返 +1' : '模式：每换向 +1';
+    if(S.count){
+      countNum.textContent = fmtCount(S.count);
+      renderLog(); renderRate();
+    }
+  }
+
+  // ---------- GPS ----------
+  function startGPS(){
+    if(!navigator.geolocation){
+      sensorBadge.textContent = 'GPS 不可用';
+      sensorBadge.className = 'badge err';
+      return false;
+    }
+    S.watchId = navigator.geolocation.watchPosition(
+      onPosition,
+      (err) => {
+        const msg = err.code === 1 ? '权限被拒绝' :
+                    err.code === 2 ? '位置不可用' :
+                    err.code === 3 ? '超时' : err.message;
+        sensorBadge.textContent = 'GPS 错误: ' + msg;
+        sensorBadge.className = 'badge err';
+      },
+      { enableHighAccuracy:true, maximumAge:0, timeout:10000 }
+    );
+    sensorBadge.textContent = 'GPS 启动中...';
+    sensorBadge.className = 'badge';
+    return true;
+  }
+  function stopGPS(){
+    if(S.watchId !== null){
+      navigator.geolocation.clearWatch(S.watchId);
+      S.watchId = null;
+    }
+  }
+  function fmtMMSS(sec){
+    const m = Math.floor(sec/60), s = sec%60;
+    return m + ':' + String(s).padStart(2,'0');
+  }
+  function setAutoStop(){
+    S.autoStopAt = cfg.autoStop > 0 ? Date.now() + cfg.autoStop*60000 : 0;
+    S.autoStopped = false;
+  }
+  function doAutoStop(){
+    if(!S.running && S.autoStopAt === 0) return;
+    S.autoStopAt = 0; S.autoStopped = true;
+    S.running = false;
+    if(S.sim){ clearInterval(simTimer); }
+    else { stopGPS(); }
+    startBtn.textContent = '继续';
+    sensorBadge.textContent = '已到时自动停止';
+    sensorBadge.className = 'badge ok';
+    autoBadge.textContent = '';
+    applyWakeLock();
+    vibrate(); beep();
+    saveState();
+  }
+
+  // ---------- 模拟测试 ----------
+  let simTimer = null, simT = 0, simSeg = 0, simSegT = 0;
+  let simLat = 35.0, simLon = 117.0;
+  const SIM = { speed:8, duration:5000, pause:1000 };  // 8 km/h, 5s 行程, 1s 停顿
+
+  function simStep(){
+    simT += 1000; simSegT += 1000;
+    let spd = 0;
+    if(simSeg === 0 || simSeg === 2) spd = SIM.speed;   // 运动中
+    else spd = 0;                                         // 停顿中
+
+    // 沿东西向直线移动
+    if(spd > 0){
+      const dist_m = spd / 3.6;  // m/s * 1s = 米
+      const dir = (simSeg === 0) ? 1 : -1;  // +1 东, -1 西
+      simLon += dir * dist_m / (111320 * Math.cos(simLat * Math.PI / 180));
+    }
+
+    // 模拟 GPS 噪声（±3m），航向含 ±15° 噪声
+    const noiseM = 3;
+    const heading = spd > 0 ? ((simSeg === 0) ? 90 : 270) + (Math.random() - 0.5) * 30 : null;
+    const fakePos = {
+      coords: {
+        latitude:  simLat + (Math.random() - 0.5) * noiseM * 2 / 111320,
+        longitude: simLon + (Math.random() - 0.5) * noiseM * 2 / (111320 * Math.cos(simLat * Math.PI / 180)),
+        accuracy:  3 + Math.random() * 4,
+        speed:     spd / 3.6,
+        heading:   heading,
+      },
+      timestamp: simT,
+    };
+
+    // 推进段
+    const dur = (simSeg === 0 || simSeg === 2) ? SIM.duration : SIM.pause;
+    if(simSegT >= dur){ simSegT = 0; simSeg = (simSeg + 1) % 4; }
+
+    onPosition(fakePos);
+  }
+
+  function startSim(){
+    S.running = true; S.sim = true;
+    S.refLat = null; S.refLon = null;
+    S.posHistory = [];
+    S.strokeHeading = null; S.curDir = 0;
+    S.pendingReversal = null;
+    S.speed = 0;
+    simT = Date.now(); simSeg = 0; simSegT = 0;
+    simLat = 35.0; simLon = 117.0;
+    sensorBadge.textContent = '模拟运行中';
+    sensorBadge.className = 'badge ok';
+    startBtn.textContent = '暂停';
+    simTimer = setInterval(simStep, 1000);
+  }
+
+  // ---------- 控制 ----------
+  const startBtn = $('startBtn'), resetBtn = $('resetBtn'),
+        manualBtn = $('manualBtn'), simBtn = $('simBtn');
+
+  function beginRun(){
+    S.running = true;
+    S.refLat = null; S.refLon = null;
+    S.posHistory = [];
+    S.strokeHeading = null;
+    S.curDir = 0;
+    S.strokeStart = 0; S.strokePeak = 0;
+    S.pendingReversal = null;
+    S.speed = 0; S.speedRaw = 0;
+    if(!S.startTime) S.startTime = Date.now();
+    setAutoStop();
+    startBtn.textContent = '暂停';
+  }
+
+  startBtn.addEventListener('click', () => {
+    if(S.running){
+      // 暂停
+      S.running = false;
+      if(S.sim){ clearInterval(simTimer); }
+      else { stopGPS(); }
+      startBtn.textContent = '继续';
+      sensorBadge.textContent = '已暂停';
+      sensorBadge.className = 'badge';
+      applyWakeLock();
+      return;
+    }
+    if(S.sim){
+      // 从模拟暂停恢复
+      S.running = true;
+      S.posHistory = [];   // 清除陈旧位置
+      S.strokeHeading = null; S.curDir = 0;
+      S.pendingReversal = null;
+      startBtn.textContent = '暂停';
+      simTimer = setInterval(simStep, 1000);
+      setAutoStop();
+      sensorBadge.textContent = '模拟运行中';
+      sensorBadge.className = 'badge ok';
+      applyWakeLock();
+      return;
+    }
+    // 首次开始 GPS
+    beginRun();
+    startGPS();
+    applyWakeLock();
+  });
+
+  function clearState(){
+    S.count = 0; S.counts = []; S.startTime = 0; S.lastCountT = 0;
+    S.curDir = 0; S.reversalParity = 0;
+    S.refLat = null; S.refLon = null;
+    S.posHistory = [];
+    S.strokeHeading = null;
+    S.strokeStart = 0; S.strokePeak = 0;
+    S.pendingReversal = null;
+    S.speed = 0; S.speedRaw = 0;
+    S.autoStopAt = 0; S.autoStopped = false;
+    autoBadge.textContent = '';
+  }
+
+  resetBtn.addEventListener('click', () => {
+    clearState();
+    countNum.textContent = '0'; rateV.textContent = '0.0'; timeV.textContent = '00:00';
+    renderLog(); renderSpeed();
+    sensorBadge.textContent = '已重置';
+    sensorBadge.className = 'badge';
+    saveState();
+  });
+
+  manualBtn.addEventListener('click', () => {
+    if(!S.startTime) S.startTime = Date.now();
+    S.count++; countNum.textContent = fmtCount(S.count);
+    countNum.classList.remove('flash'); void countNum.offsetWidth; countNum.classList.add('flash');
+    S.counts.unshift({t:new Date(), dir:'手动'});
+    if(S.counts.length > 40) S.counts.pop();
+    vibrate(); beep(); renderRate(); renderLog();
+    saveState();
+  });
+
+  simBtn.addEventListener('click', () => {
+    if(S.sim){
+      clearInterval(simTimer); S.sim = false; S.running = false;
+      startBtn.textContent = '开始';
+      sensorBadge.textContent = '模拟结束';
+      sensorBadge.className = 'badge';
+      applyWakeLock();
+      return;
+    }
+    // 停止 GPS（如在运行）
+    if(S.running){ stopGPS(); S.running = false; }
+    clearState();
+    S.startTime = Date.now();
+    countNum.textContent = '0';
+    startSim();
+  });
+
+  // ---------- 参数绑定 ----------
+  function bindSlider(id, key, vid){
+    const el = $(id), v = $(vid);
+    el.addEventListener('input', () => {
+      cfg[key] = parseFloat(el.value);
+      v.textContent = el.value;
+      saveState();
+    });
+  }
+  bindSlider('maxAccuracy','maxAccuracy','maxAccuracyV');
+  bindSlider('minMoving','minMoving','minMovingV');
+  bindSlider('reversalAngle','reversalAngle','reversalAngleV');
+  bindSlider('minGap','minGap','minGapV');
+  bindSlider('minStroke','minStrokeDur','minStrokeV');
+  bindSlider('minPeak','minPeak','minPeakV');
+  bindSlider('speedSmooth','speedSmooth','speedSmoothV');
+
+  function bindToggle(id, key, onChange){
+    const el = $(id);
+    el.addEventListener('click', () => {
+      cfg[key] = !cfg[key];
+      el.classList.toggle('on', cfg[key]);
+      if(onChange) onChange();
+    });
+  }
+  bindToggle('vibToggle','vibrate', saveState);
+  bindToggle('sndToggle','sound', saveState);
+  bindToggle('wakeToggle','keepAwake', () => { applyWakeLock(); saveState(); });
+  $('autoStop').addEventListener('change', () => {
+    cfg.autoStop = parseInt($('autoStop').value, 10) || 0;
+    if(S.running){
+      if(cfg.autoStop > 0){ S.autoStopAt = Date.now() + cfg.autoStop*60000; S.autoStopped = false; }
+      else { S.autoStopAt = 0; autoBadge.textContent = ''; }
+    }
+    saveState();
+  });
+  bindToggle('div2Toggle','div2', () => { countNum.textContent = fmtCount(S.count); renderRate(); saveState(); });
+  bindToggle('modeToggle','perRound', () => {
+    modeText.textContent = cfg.perRound ? '模式：每往返 +1' : '模式：每换向 +1';
+    saveState();
+  });
+
+  // 初始化：恢复上次计数与设置
+  loadState();
+  syncUI();
+  renderLog(); renderSpeed();
+})();
+</script>
+</body>
+</html>
