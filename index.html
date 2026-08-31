@@ -73,7 +73,6 @@
   <h1>装载机往复自动计数器</h1>
   <div class="sub">GPS 定位感知直线往复运动 · 按方向变化自动计数
     <span id="sensorBadge" class="badge">GPS 未启动</span>
-    <span id="autoBadge" class="badge"></span>
     <span id="wakeBadge" class="badge ok" style="display:none">屏幕常亮中</span>
   </div>
 
@@ -243,8 +242,10 @@
     strokePeak:0,          // 冲程峰值速度(km/h)
     reversalParity:0,      // 每往返+1 时的奇偶计数
     pendingReversal:null,  // 待确认的换向（下一读数确认方向持续后再计数）
-    autoStopAt:0,        // 自动停止目标时间戳(ms)，0=无
-    autoStopped:false,   // 是否因到时自动停止
+    autoStopped:false,   // 是否因到时自动停止（按累计运行时间比较，不再用目标时间戳）
+    activeMs:0,          // 累计运行毫秒数（不含暂停），用于计时与频率
+    lastRunT:0,          // 最近一次运行态时间戳，用于累计 activeMs
+    paused:false,        // 是否处于"已暂停"（区别于未开始/已停止）
   };
 
   // ---------- DOM ----------
@@ -252,7 +253,7 @@
   const countNum=$('countNum'), rateV=$('rateV'), timeV=$('timeV'),
         dirPill=$('dirPill'), speedBar=$('speedBar'), speedTxt=$('speedTxt'),
         modeText=$('modeText'), logBox=$('logBox'), sensorBadge=$('sensorBadge'),
-        autoBadge=$('autoBadge');
+        autoBadge=$('autoBadge') || { textContent:'', className:'' };  // 冗余徽标已移除，保留空操作以免报错
 
   // ---------- 声音/振动 ----------
   let audioCtx=null;
@@ -473,8 +474,7 @@
     speedTxt.textContent = '实时车速：' + dispSpeed.toFixed(1) + ' km/h';
   }
   function renderRate(){
-    if(!S.startTime){ rateV.textContent='0.0'; return; }
-    const mins = (Date.now() - S.startTime) / 60000;
+    const mins = S.activeMs / 60000;
     const base = cfg.div2 ? S.count / 2 : S.count;
     rateV.textContent = mins > 0 ? (base / mins).toFixed(1) : '0.0';
   }
@@ -488,20 +488,24 @@
     logBox.innerHTML = h;
   }
   function tickTimer(){
-    if(!S.startTime){ timeV.textContent='00:00'; autoBadge.textContent=''; return; }
-    const s = Math.floor((Date.now() - S.startTime) / 1000);
+    if(!S.startTime){
+      timeV.textContent = '00:00';
+      return;
+    }
+    // 计时只累计运行态（暂停期间 activeMs 冻结，恢复后接着走）；始终按已运行时间正常计时
+    if(S.running){
+      S.activeMs += Date.now() - S.lastRunT;
+      S.lastRunT = Date.now();
+    }
+    renderRate();
+    // 自动停止：累计运行时间达到设定时长即停止（暂停不计时，故暂停等效延长可运行时间）
+    if(cfg.autoStop > 0 && S.running && !S.autoStopped && S.activeMs >= cfg.autoStop*60000){
+      doAutoStop();
+    }
+    const s = Math.floor(S.activeMs / 1000);
     const mm = String(Math.floor(s/60)).padStart(2,'0');
     const ss = String(s%60).padStart(2,'0');
     timeV.textContent = mm + ':' + ss;
-    renderRate();
-    // 自动停止倒计时
-    if(S.running && S.autoStopAt > 0){
-      const left = S.autoStopAt - Date.now();
-      if(left <= 0){ doAutoStop(); }
-      else { autoBadge.textContent = '剩余 ' + fmtMMSS(Math.ceil(left/1000)); autoBadge.className = 'badge warn'; }
-    } else if(S.autoStopAt > 0 && !S.running){
-      autoBadge.textContent = '';
-    }
   }
   setInterval(tickTimer, 500);
 
@@ -539,14 +543,18 @@
   // 页面重新可见（曾熄屏/切后台）：清除陈旧位置与冲程状态，防止恢复后位置跳变误判换向
   document.addEventListener('visibilitychange', () => {
     if(document.visibilityState === 'visible'){
-      if(S.running && !S.sim){
-        S.posHistory = [];
-        S.strokeHeading = null;
-        S.curDir = 0;
-        S.pendingReversal = null;
-        S.speed = 0; S.speedRaw = 0;
-        sensorBadge.textContent = 'GPS 恢复中...';
-        sensorBadge.className = 'badge';
+      if(S.running){
+        // 复位计时基点：切后台/熄屏期间不计入运行时间，避免恢复后计时跳变
+        S.lastRunT = Date.now();
+        if(!S.sim){
+          S.posHistory = [];
+          S.strokeHeading = null;
+          S.curDir = 0;
+          S.pendingReversal = null;
+          S.speed = 0; S.speedRaw = 0;
+          sensorBadge.textContent = 'GPS 恢复中...';
+          sensorBadge.className = 'badge';
+        }
       }
       applyWakeLock();
     }
@@ -561,7 +569,7 @@
         count: S.count,
         counts: S.counts.map(c => ({t: c.t.getTime(), dir: c.dir})),
         startTime: S.startTime,
-        autoStopAt: S.autoStopAt,
+        activeMs: S.activeMs,
       }));
     }catch(e){}
   }
@@ -574,8 +582,7 @@
       S.count = d.count || 0;
       S.counts = (d.counts || []).map(c => ({t: new Date(c.t), dir: c.dir}));
       S.startTime = d.startTime || 0;
-      S.autoStopAt = d.autoStopAt || 0;
-      if(S.autoStopAt > 0 && Date.now() >= S.autoStopAt) S.autoStopAt = 0; // 过期则不再自动停
+      S.activeMs = d.activeMs || 0;
     }catch(e){}
   }
   // 按已保存的配置同步 UI 控件
@@ -630,23 +637,20 @@
     }
   }
   function fmtMMSS(sec){
+    sec = Math.max(0, Math.floor(sec));
     const m = Math.floor(sec/60), s = sec%60;
-    return m + ':' + String(s).padStart(2,'0');
+    return String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
   }
-  function setAutoStop(){
-    S.autoStopAt = cfg.autoStop > 0 ? Date.now() + cfg.autoStop*60000 : 0;
-    S.autoStopped = false;
-  }
+  // 自动停止改为按累计运行时间(activeMs)比较，无需 setAutoStop 预置时间戳
   function doAutoStop(){
-    if(!S.running && S.autoStopAt === 0) return;
-    S.autoStopAt = 0; S.autoStopped = true;
-    S.running = false;
+    if(!S.running) return;   // 仅运行态触发，避免重复停止
+    if(S.lastRunT) S.activeMs += Date.now() - S.lastRunT;  // 结算最后一段运行时长
+    S.running = false; S.paused = false; S.autoStopped = true;
     if(S.sim){ clearInterval(simTimer); }
     else { stopGPS(); }
     startBtn.textContent = '继续';
     sensorBadge.textContent = '已到时自动停止';
     sensorBadge.className = 'badge ok';
-    autoBadge.textContent = '';
     applyWakeLock();
     vibrate(); beep();
     saveState();
@@ -692,7 +696,7 @@
   }
 
   function startSim(){
-    S.running = true; S.sim = true;
+    S.running = true; S.sim = true; S.paused = false;
     S.refLat = null; S.refLon = null;
     S.posHistory = [];
     S.strokeHeading = null; S.curDir = 0;
@@ -700,6 +704,7 @@
     S.speed = 0;
     simT = Date.now(); simSeg = 0; simSegT = 0;
     simLat = 35.0; simLon = 117.0;
+    S.lastRunT = Date.now();   // 计时基点（否则首帧 Date.now()-0 会爆表）
     sensorBadge.textContent = '模拟运行中';
     sensorBadge.className = 'badge ok';
     startBtn.textContent = '暂停';
@@ -711,7 +716,7 @@
         manualBtn = $('manualBtn'), simBtn = $('simBtn');
 
   function beginRun(){
-    S.running = true;
+    S.running = true; S.paused = false; S.autoStopped = false;  // 新开一轮，重新计时
     S.refLat = null; S.refLon = null;
     S.posHistory = [];
     S.strokeHeading = null;
@@ -719,35 +724,54 @@
     S.strokeStart = 0; S.strokePeak = 0;
     S.pendingReversal = null;
     S.speed = 0; S.speedRaw = 0;
-    if(!S.startTime) S.startTime = Date.now();
-    setAutoStop();
+    S.startTime = Date.now(); S.activeMs = 0;  // 新一轮总是从 0 计时（覆盖刷新页面后残留的 startTime，避免点开始就接着旧时间走）
+    S.lastRunT = Date.now();
     startBtn.textContent = '暂停';
   }
 
   startBtn.addEventListener('click', () => {
     if(S.running){
-      // 暂停
-      S.running = false;
+      // 暂停：计数与计时一并冻结（activeMs 暂停期间不累计，恢复后接着走）
+      S.activeMs += Date.now() - S.lastRunT;
+      S.running = false; S.paused = true;
       if(S.sim){ clearInterval(simTimer); }
       else { stopGPS(); }
       startBtn.textContent = '继续';
       sensorBadge.textContent = '已暂停';
       sensorBadge.className = 'badge';
       applyWakeLock();
+      saveState();
       return;
     }
     if(S.sim){
-      // 从模拟暂停恢复
-      S.running = true;
+      // 从模拟暂停恢复：计时从冻结值继续，自动停止按累计运行时间判断
+      S.running = true; S.paused = false;
+      S.lastRunT = Date.now();
       S.posHistory = [];   // 清除陈旧位置
       S.strokeHeading = null; S.curDir = 0;
       S.pendingReversal = null;
       startBtn.textContent = '暂停';
       simTimer = setInterval(simStep, 1000);
-      setAutoStop();
       sensorBadge.textContent = '模拟运行中';
       sensorBadge.className = 'badge ok';
       applyWakeLock();
+      saveState();
+      return;
+    }
+    if(S.paused){
+      // 真实 GPS 继续：计时从冻结值继续，自动停止按累计运行时间判断
+      S.running = true; S.paused = false;
+      S.lastRunT = Date.now();
+      S.posHistory = [];
+      S.strokeHeading = null; S.curDir = 0;
+      S.pendingReversal = null;
+      S.speed = 0; S.speedRaw = 0;
+      startBtn.textContent = '暂停';
+      sensorBadge.textContent = 'GPS 恢复中...';
+      sensorBadge.className = 'badge';
+      startGPS();
+      applyWakeLock();
+      saveState();
       return;
     }
     // 首次开始 GPS
@@ -765,13 +789,19 @@
     S.strokeStart = 0; S.strokePeak = 0;
     S.pendingReversal = null;
     S.speed = 0; S.speedRaw = 0;
-    S.autoStopAt = 0; S.autoStopped = false;
-    autoBadge.textContent = '';
+    S.autoStopped = false;
+    S.activeMs = 0; S.lastRunT = 0;
+    S.running = false; S.paused = false; S.sim = false;  // 回到初始态
+    if(simTimer){ clearInterval(simTimer); simTimer = null; }  // 复位务必停掉可能仍在跑的模拟计时器，避免残留双计
   }
 
   resetBtn.addEventListener('click', () => {
+    stopGPS();                              // 先停掉可能仍在运行的 GPS 监听，避免重置后残留双监听
     clearState();
+    cfg.autoStop = 0;                       // 重置回到"不设置"初始状态
+    const asEl = $('autoStop'); if(asEl) asEl.value = '0';
     countNum.textContent = '0'; rateV.textContent = '0.0'; timeV.textContent = '00:00';
+    startBtn.textContent = '开始';          // 重置后按钮回到"开始"
     renderLog(); renderSpeed();
     sensorBadge.textContent = '已重置';
     sensorBadge.className = 'badge';
@@ -835,10 +865,7 @@
   bindToggle('wakeToggle','keepAwake', () => { applyWakeLock(); saveState(); });
   $('autoStop').addEventListener('change', () => {
     cfg.autoStop = parseInt($('autoStop').value, 10) || 0;
-    if(S.running){
-      if(cfg.autoStop > 0){ S.autoStopAt = Date.now() + cfg.autoStop*60000; S.autoStopped = false; }
-      else { S.autoStopAt = 0; autoBadge.textContent = ''; }
-    }
+    S.autoStopped = false;   // 改设置即重新计时，下次到达新时长再自动停止
     saveState();
   });
   bindToggle('div2Toggle','div2', () => { countNum.textContent = fmtCount(S.count); renderRate(); saveState(); });
