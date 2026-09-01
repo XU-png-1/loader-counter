@@ -70,7 +70,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>装载机往复自动计数器 <span style="font-size:12px;color:var(--sub);font-weight:400;">v2026-08-31</span></h1>
+  <h1>装载机往复自动计数器 <span style="font-size:12px;color:var(--sub);font-weight:400;">v2026-09-01d</span></h1>
   <div class="sub">GPS 定位感知直线往复运动 · 按方向变化自动计数
     <span id="sensorBadge" class="badge">GPS 未启动</span>
     <span id="wakeBadge" class="badge ok" style="display:none">屏幕常亮中</span>
@@ -110,14 +110,14 @@
       <div class="hint">定位精度差于此值的位置将被忽略。越小越严格，室内可适当调大。</div>
       <div class="row">
         <label>运动阈值(km/h)</label>
-        <input type="range" id="minMoving" min="0.5" max="5" step="0.1" value="2">
-        <span class="val" id="minMovingV">2</span>
+        <input type="range" id="minMoving" min="0.5" max="5" step="0.1" value="1.0">
+        <span class="val" id="minMovingV">1.0</span>
       </div>
       <div class="hint">GPS 车速高于此值才判定为"运动中"，低于则视为静止。</div>
       <div class="row">
         <label>换向角度(°)</label>
-        <input type="range" id="reversalAngle" min="90" max="170" step="5" value="120">
-        <span class="val" id="reversalAngleV">120</span>
+        <input type="range" id="reversalAngle" min="90" max="170" step="5" value="130">
+        <span class="val" id="reversalAngleV">130</span>
       </div>
       <div class="hint">运动方向偏转超过此角度判定为换向。换向后需连续确认方向持续才计数，可滤掉 GPS 噪声尖峰。</div>
       <div class="row">
@@ -134,8 +134,8 @@
       <div class="hint">一个有效冲程至少持续时长，过滤短时晃动。</div>
       <div class="row">
         <label>最小峰值速度(km/h)</label>
-        <input type="range" id="minPeak" min="1" max="10" step="0.5" value="3">
-        <span class="val" id="minPeakV">3</span>
+        <input type="range" id="minPeak" min="1" max="10" step="0.5" value="1.5">
+        <span class="val" id="minPeakV">1.5</span>
       </div>
       <div class="hint">一个有效冲程的峰值速度下限(km/h)，滤掉小幅运动。</div>
       <div class="row">
@@ -184,6 +184,11 @@
     <details>
       <summary>计数记录</summary>
       <div class="log" id="logBox"><div style="color:#5b6b7d">暂无记录</div></div>
+      <div class="btns" style="margin-top:10px;">
+        <button class="btn ghost" id="exportBtn">导出调试CSV</button>
+        <button class="btn ghost" id="clearDbgBtn">清空调试</button>
+      </div>
+      <div class="hint" id="dbgInfo">调试记录：0 条读数 / 0 条换向事件</div>
     </details>
   </div>
 
@@ -206,11 +211,11 @@
   // ---------- 配置 ----------
   const cfg = {
     maxAccuracy: 40,     // m, GPS 定位精度上限（口袋等弱信号场景放宽到 40）
-    minMoving: 2.0,      // km/h, 运动判定阈值
-    reversalAngle: 120,  // 度, 运动方向偏转超过此值判定为换向
-    minGap: 0.5,         // 秒, 两次计数最小间隔（单程约20m时换向频繁，放宽到0.5s避免漏计）
-    minStrokeDur: 1.5,   // 秒, 一个有效冲程至少持续时长（单程约20m、低速工况更宽容，仍远大于GPS噪声抖动）
-    minPeak: 3.0,        // km/h, 一个有效冲程的峰值速度下限（GPS 噪声常 <3 km/h）
+    minMoving: 1.0,      // km/h, 运动判定阈值（装载机慢速工况放宽，让低速换向帧也能进判定）
+    reversalAngle: 130,  // 度, 运动方向偏转超过此值判定为换向（覆盖斜向掉头）
+    minGap: 0.5,         // 秒, 两次计数最小间隔（放宽到0.5s避免快速往返漏计）
+    minStrokeDur: 1.5,   // 秒, 一个有效冲程至少持续时长
+    minPeak: 1.5,        // km/h, 一个有效冲程的峰值速度下限（与运动阈值解耦，守住计数质量）
     speedSmooth: 0.4,    // 速度 EMA 平滑系数（0~0.8），越大越平滑
     perRound: true,      // true=每往返+1, false=每换向+1
     vibrate: true,
@@ -246,6 +251,8 @@
     activeMs:0,          // 累计运行毫秒数（不含暂停），用于计时与频率
     lastRunT:0,          // 最近一次运行态时间戳，用于累计 activeMs
     paused:false,        // 是否处于"已暂停"（区别于未开始/已停止）
+    dbg:[],              // 调试：每次 GPS 读数明细（导出分析漏记用）
+    dbgEvt:[],           // 调试：换向事件与三道闸门判定（导出分析漏记用）
   };
 
   // ---------- DOM ----------
@@ -315,6 +322,9 @@
     if(!S.running) return;
     const { latitude, longitude, accuracy, speed } = pos.coords;
     const t = pos.timestamp || Date.now();
+    let dbgMh = null;   // 调试：本帧运动方向（供导出分析）
+    if(!S.dbg) S.dbg = [];           // 惰性初始化（从本地恢复状态时可能缺失）
+    if(!S.dbgEvt) S.dbgEvt = [];
 
     // 精度容忍：口袋/弱信号场景下 GPS accuracy 常达 20~50m。
     // 不再因精度差直接丢弃整条读数——OS 上报的多普勒 speed/heading 即便在中等精度下仍可靠；
@@ -360,6 +370,7 @@
     // 有 OS 航向时即便无位置历史也可判定方向（弱信号场景位置历史可能为空）
     if((S.speed > cfg.minMoving && spd > 0.3) && (hasHeading || S.posHistory.length >= 2)){
       const mh = getMoveHeading(pos.coords, poor);   // 当前运动方向角（度）或 null
+      dbgMh = mh;
       if(mh !== null){
         if(S.strokeHeading === null){
           // 首次确立运动方向（不计）
@@ -377,6 +388,11 @@
             if(aNew < 60){
               // 持续沿新方向：确认换向（方向已反转），补记该次换向
               if(pr.valid) registerCount(pr.reversalT, pr.dirDesc);
+              S.dbgEvt.push([
+                new Date(t).toTimeString().slice(0,8),
+                (pr.valid ? '确认→计数' : '确认→闸门未过不计数'),
+                '', '', '', '', '', '', '', (pr.valid ? 1 : 0), (pr.valid ? 1 : 0),
+              ]);
               S.pendingReversal = null;
             } else if(aOld < 60){
               // 回弹：回到旧方向（噪声尖峰），取消并恢复原冲程
@@ -385,6 +401,7 @@
               S.strokePeak = pr.oldStrokePeak;
               S.curDir = pr.oldCurDir;
               updateDir(S.curDir);
+              S.dbgEvt.push([new Date(t).toTimeString().slice(0,8), '回弹撤销(方向尖峰)', '', '', '', '', '', '', '', 0, 0]);
               S.pendingReversal = null;
             } else if(t - pr.reversalT > 3000){
               // 3 秒未确认：按噪声处理，恢复原冲程
@@ -393,6 +410,7 @@
               S.strokePeak = pr.oldStrokePeak;
               S.curDir = pr.oldCurDir;
               updateDir(S.curDir);
+              S.dbgEvt.push([new Date(t).toTimeString().slice(0,8), '超时撤销(3s未确认)', '', '', '', '', '', '', '', 0, 0]);
               S.pendingReversal = null;
             }
             // 其余情况：方向仍不明，保持待确认，等下一读数
@@ -409,6 +427,20 @@
               const dur = (t - S.strokeStart) / 1000;
               const gapOk = S.lastCountT === 0 || (t - S.lastCountT) / 1000 > cfg.minGap;
               const valid = dur >= cfg.minStrokeDur && S.strokePeak >= cfg.minPeak && gapOk;
+              S.dbgEvt.push([
+                new Date(t).toTimeString().slice(0,8),
+                '疑似换向',
+                +angle.toFixed(1),
+                +dur.toFixed(2),
+                (dur >= cfg.minStrokeDur ? 1 : 0),
+                +S.strokePeak.toFixed(2),
+                (S.strokePeak >= cfg.minPeak ? 1 : 0),
+                (S.lastCountT === 0 ? '' : +((t - S.lastCountT)/1000).toFixed(2)),
+                (gapOk ? 1 : 0),
+                (valid ? 1 : 0),
+                '',
+              ]);
+              if(S.dbgEvt.length > 2000) S.dbgEvt.shift();
               S.pendingReversal = {
                 valid: valid,
                 reversalT: t,
@@ -433,6 +465,24 @@
       updateDir(0);
     }
 
+    // ——调试：记录本帧读数（导出后可逐帧分析为何未触发换向）——
+    S.dbg.push([
+      new Date(t).toTimeString().slice(0,8),
+      +spd.toFixed(2),
+      +S.speed.toFixed(2),
+      (dbgMh === null ? '' : +dbgMh.toFixed(1)),
+      (hasHeading ? 'GPS' : (S.posHistory.length >= 2 ? 'POS' : 'NONE')),
+      (accuracy ? +accuracy.toFixed(1) : ''),
+      (poor ? 1 : 0),
+      ((S.speed > cfg.minMoving && spd > 0.3) ? 1 : 0),
+      (S.speed > cfg.minMoving ? 1 : 0),
+      (S.strokeHeading === null ? '' : +S.strokeHeading.toFixed(1)),
+      S.curDir,
+      +S.strokePeak.toFixed(2),
+    ]);
+    if(S.dbg.length > 8000) S.dbg.shift();
+    if(typeof updateDbgInfo === 'function') updateDbgInfo();
+
     renderSpeed();
   }
 
@@ -443,7 +493,7 @@
   }
   // 计数按 div2 口径显示（整数直接显示，非整数保留 1 位小数）
   function fmtCount(n){
-    const v = cfg.div2 ? n / 2 : n;
+    const v = cfg.div2 ? n / 2 : n;   // 结果÷2：现场一趟含 2 个往返(4 次换向)，故再折算一次
     return Number.isInteger(v) ? String(v) : v.toFixed(1);
   }
 
@@ -792,6 +842,8 @@
     S.autoStopped = false;
     S.activeMs = 0; S.lastRunT = 0;
     S.running = false; S.paused = false; S.sim = false;  // 回到初始态
+    S.dbg = []; S.dbgEvt = [];   // 重置同时清空调试记录，新一轮测试从干净数据开始
+    if(typeof updateDbgInfo === 'function') updateDbgInfo();
     if(simTimer){ clearInterval(simTimer); simTimer = null; }  // 复位务必停掉可能仍在跑的模拟计时器，避免残留双计
   }
 
@@ -817,6 +869,48 @@
     vibrate(); beep(); renderRate(); renderLog();
     saveState();
   });
+
+  // ---------- 调试导出：把每帧读数与每道闸门结果导出为 CSV，用于精确定位漏记 ----------
+  function updateDbgInfo(){
+    const el = document.getElementById('dbgInfo');
+    if(el) el.textContent = '调试记录：' + ((S.dbg && S.dbg.length) || 0) + ' 条读数 / ' + ((S.dbgEvt && S.dbgEvt.length) || 0) + ' 条换向事件';
+  }
+  function exportDbg(){
+    const dbg = S.dbg || [], evt = S.dbgEvt || [];
+    if(!dbg.length && !evt.length){
+      alert('还没有调试记录。\n请点「开始」跑一段真实作业（或模拟测试），结束后再点导出。');
+      return;
+    }
+    const rows = [];
+    rows.push('# 装载机计数器 调试导出');
+    rows.push('# 导出时间,' + new Date().toLocaleString('zh-CN'));
+    rows.push('# 参数,换向角=' + cfg.reversalAngle + '度,运动阈值=' + cfg.minMoving + 'km/h,最小间隔=' + cfg.minGap + 's,冲程时长=' + cfg.minStrokeDur + 's,最小峰值=' + cfg.minPeak + 'km/h,精度上限=' + cfg.maxAccuracy + 'm,速度平滑=' + cfg.speedSmooth);
+    rows.push('# 结果,计数=' + S.count + ',运行秒数=' + (S.activeMs/1000).toFixed(1) + ',模式=' + (cfg.perRound ? '每往返(2次换向=1)' : '每换向'));
+    rows.push('');
+    rows.push('=== GPS读数明细 ===');
+    rows.push('时间,原始速度km/h,平滑速度km/h,本帧航向,航向来源,定位精度m,弱信号,进入判定,速度超阈值,冲程方向,当前方向,冲程峰值km/h');
+    for(const d of dbg) rows.push(d.join(','));
+    rows.push('');
+    rows.push('=== 换向事件与闸门 ===');
+    rows.push('时间,事件,转角,冲程时长s,时长达标,峰值km/h,峰值达标,距上次计数s,间隔达标,有效,计入');
+    for(const e of evt) rows.push(e.join(','));
+    rows.push('');
+    rows.push('# 漏记排查方法：');
+    rows.push('# 1) 看「换向事件」里 有效=0 的行，检查 时长达标/峰值达标/间隔达标 哪一项是 0，即卡在该闸门；');
+    rows.push('# 2) 出现「超时撤销/回弹撤销」= 方向变了但下一帧没确认，多为低速段航向噪声或掉头过慢；');
+    rows.push('# 3) 若换向事件条数本身就少于实际掉头次数，说明转角未超过换向角，或掉头时速度低于运动阈值未进入判定。');
+    const blob = new Blob(['\ufeff' + rows.join('\n')], {type:'text/csv;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'loader-debug-' + new Date().toISOString().slice(0,19).replace(/[-:T]/g,'') + '.csv';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(()=>URL.revokeObjectURL(a.href), 2000);
+  }
+  $('exportBtn').addEventListener('click', exportDbg);
+  $('clearDbgBtn').addEventListener('click', () => {
+    S.dbg = []; S.dbgEvt = []; updateDbgInfo();
+  });
+  updateDbgInfo();
 
   simBtn.addEventListener('click', () => {
     if(S.sim){
